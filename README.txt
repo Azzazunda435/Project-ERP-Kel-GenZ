@@ -8,15 +8,6 @@ Library CDN versions:
 - Bootstrap 5.3.2
 - Chart.js 4.4.1
 
-Format input tiap halaman (contoh):
-- BOM: ProdukA, Komp1:2, Komp2:3
-- Forecasting: 120,130,125,140,150,160
-- JSM: Alternatif1, 3, 2025-12-01
-- SAW: Alternatif1, 80,70,90  (Bobot di field Extra: 0.4,0.35,0.25)
-- Market Basket: bread,milk
-- Profile Matching: Ideal,5,5,5  then candidates
-- Markov: A,B,A,C,B,A
-
 Fitur:
 - Header & footer di-include via fetch.
 - Validasi, spinner 0.5s, langkah perhitungan, tabel hasil, export CSV.
