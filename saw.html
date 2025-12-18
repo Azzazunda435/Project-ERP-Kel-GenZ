@@ -1,0 +1,346 @@
+<!-- saw.html -->
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Metode SAW - ERP Tools</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="assets/css/styles.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    .result-step { margin: 20px 0; padding: 15px; background: #f8f9fa; border-left: 4px solid #0d6efd; }
+    .result-step h3 { color: #0d6efd; margin-bottom: 15px; }
+    .result-step table { width: 100%; border-collapse: collapse; }
+    .result-step table th, .result-step table td { padding: 8px; border: 1px solid #ddd; text-align: center; }
+    .result-step table th { background: #e9ecef; font-weight: bold; }
+    .result-step table td:first-child { text-align: left; }
+    .formula { background: #e7f3ff; padding: 10px; border-radius: 4px; margin: 10px 0; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <div id="headerInclude"></div>
+  <main class="container my-4">
+    <h1 class="h4">SAW (Simple Additive Weighting)</h1>
+    <p class="text-muted">Sistem pendukung keputusan dengan pembobotan kriteria (mendukung cost & benefit).</p>
+
+    <div class="mb-3">
+      <label for="altsInput" class="form-label">Daftar alternatif (satu per baris)</label>
+      <textarea id="altsInput" class="form-control" rows="4" placeholder="A1&#10;A2&#10;A3"></textarea>
+    </div>
+
+    <div class="mb-3">
+      <label for="weightsInput" class="form-label">Bobot kriteria (pisahkan dengan koma)</label>
+      <input type="text" id="weightsInput" class="form-control" placeholder="Contoh: 0.4,0.3,0.3">
+    </div>
+
+    <div class="mb-3">
+      <label for="typesInput" class="form-label">Tipe kriteria (C = Cost, B = Benefit, pisahkan dengan koma)</label>
+      <input type="text" id="typesInput" class="form-control" placeholder="Contoh: C,B,B,C,B">
+    </div>
+
+    <div class="mb-3">
+      <label for="matrixInput" class="form-label">Matriks nilai (satu baris per alternatif, nilai pisahkan dengan koma)</label>
+      <textarea id="matrixInput" class="form-control" rows="6" placeholder="80,70,90&#10;75,85,80&#10;90,60,85"></textarea>
+    </div>
+
+    <div class="mb-3">
+      <button onclick="hitungSAW()" class="btn btn-primary">Hitung SAW</button>
+      <button onclick="resetForm()" class="btn btn-secondary">Reset</button>
+      <a href="index.html" class="btn btn-link">Kembali ke Dashboard</a>
+    </div>
+
+    <div id="result" class="result" style="display:none;"></div>
+
+    <div class="chart-container mt-4">
+      <h5>Chart Hasil SAW</h5>
+      <canvas id="sawChart"></canvas>
+    </div>
+  </main>
+  <div id="footerInclude"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="assets/js/app.js"></script>
+  <script>
+  // include header/footer
+  ['header.html','footer.html'].forEach(function(file){
+    fetch(file).then(function(r){return r.text();}).then(function(t){
+      if(file==='header.html') document.getElementById('headerInclude').innerHTML = t;
+      else document.getElementById('footerInclude').innerHTML = t;
+    });
+  });
+
+  let sawChart = null;
+
+  function hitungSAW() {
+    const altsRaw    = document.getElementById('altsInput').value.trim();
+    const weightsRaw = document.getElementById('weightsInput').value.trim();
+    const typesRaw   = document.getElementById('typesInput').value.trim();
+    const matrixRaw  = document.getElementById('matrixInput').value.trim();
+
+    if (!altsRaw || !weightsRaw || !typesRaw || !matrixRaw) {
+      alert('Semua field (alternatif, bobot, tipe kriteria, matriks) harus diisi.');
+      return;
+    }
+
+    const alts = altsRaw.split('\n').map(x => x.trim()).filter(x => x);
+    const weights = weightsRaw
+      .split(',')
+      .map(x => parseFloat(x.trim()))
+      .filter(x => !isNaN(x));
+
+    const types = typesRaw
+      .split(',')
+      .map(x => x.trim().toUpperCase())
+      .filter(x => x);
+
+    const matrixLines = matrixRaw.split('\n').map(x => x.trim()).filter(x => x);
+    const matrix = matrixLines.map(line =>
+      line.split(',').map(x => parseFloat(x.trim())).filter(x => !isNaN(x))
+    );
+
+    if (alts.length !== matrix.length) {
+      alert('Jumlah baris matriks harus sama dengan jumlah alternatif.');
+      return;
+    }
+
+    if (matrix[0].length !== weights.length) {
+      alert('Jumlah bobot harus sama dengan jumlah kriteria (jumlah kolom matriks).');
+      return;
+    }
+
+    if (types.length !== weights.length) {
+      alert('Jumlah tipe kriteria (C/B) harus sama dengan jumlah bobot / kolom matriks.');
+      return;
+    }
+
+    for (let j = 0; j < types.length; j++) {
+      if (types[j] !== 'C' && types[j] !== 'B') {
+        alert('Tipe kriteria hanya boleh C (Cost) atau B (Benefit). Cth: C,B,B,C,B');
+        return;
+      }
+    }
+
+    const m = alts.length;      // jumlah alternatif
+    const n = weights.length;   // jumlah kriteria
+
+    // 1. Hitung nilai maksimum & minimum per kriteria
+    const maxPerKriteria = Array(n).fill(-Infinity);
+    const minPerKriteria = Array(n).fill(Infinity);
+
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < m; i++) {
+        const val = matrix[i][j];
+        if (val > maxPerKriteria[j]) maxPerKriteria[j] = val;
+        if (val < minPerKriteria[j]) minPerKriteria[j] = val;
+      }
+      if (!isFinite(maxPerKriteria[j])) maxPerKriteria[j] = 1;
+      if (!isFinite(minPerKriteria[j]) || minPerKriteria[j] === 0) minPerKriteria[j] = 1;
+    }
+
+    // 2. Normalisasi matriks:
+    // Benefit : r_ij = x_ij / max_j
+    // Cost    : r_ij = min_j / x_ij
+    const normalized = [];
+    for (let i = 0; i < m; i++) {
+      const rowNorm = [];
+      for (let j = 0; j < n; j++) {
+        let r = 0;
+        const xij = matrix[i][j];
+        if (types[j] === 'B') {
+          const maxVal = maxPerKriteria[j] === 0 ? 1 : maxPerKriteria[j];
+          r = xij / maxVal;
+        } else { // Cost
+          const minVal = minPerKriteria[j] === 0 ? 1 : minPerKriteria[j];
+          if (xij <= 0) {
+            r = 0;
+          } else {
+            r = minVal / xij;
+          }
+        }
+        rowNorm.push(r);
+      }
+      normalized.push(rowNorm);
+    }
+
+    // 3. Hitung skor SAW: V_i = Σ (r_ij * w_j)
+    const scores = [];
+    for (let i = 0; i < m; i++) {
+      let s = 0;
+      for (let j = 0; j < n; j++) {
+        s += normalized[i][j] * weights[j];
+      }
+      scores.push(s);
+    }
+
+    // 4. Susun ranking (dari skor terbesar)
+    const items = alts.map((name, idx) => ({ name, score: scores[idx] }));
+    items.sort((a, b) => b.score - a.score);
+
+    // ====== BANGUN TABEL PROSES PERHITUNGAN ======
+
+    // 1. Tabel Data Awal Matriks Keputusan
+    let tableData = '<div class="result-step"><h3>1. Data Awal Matriks Keputusan</h3>';
+    tableData += '<table><tr><th>Alternatif</th>';
+    for (let j = 0; j < n; j++) {
+      tableData += '<th>K' + (j + 1) + '</th>';
+    }
+    tableData += '</tr>';
+
+    for (let i = 0; i < m; i++) {
+      tableData += '<tr><td>' + alts[i] + '</td>';
+      for (let j = 0; j < n; j++) {
+        tableData += '<td>' + matrix[i][j] + '</td>';
+      }
+      tableData += '</tr>';
+    }
+    tableData += '</table></div>';
+
+    // 2. Tipe, nilai maksimum & minimum per kriteria
+    let tableType = '<div class="result-step"><h3>2. Tipe Kriteria, Nilai Maksimum dan Minimum</h3>';
+    tableType += '<table><tr><th>Kriteria</th><th>Tipe</th><th>Max</th><th>Min</th></tr>';
+    for (let j = 0; j < n; j++) {
+      const tipeText = types[j] === 'C' ? 'Cost (biaya)' : 'Benefit (keuntungan)';
+      tableType += '<tr>' +
+        '<td>K' + (j + 1) + '</td>' +
+        '<td>' + tipeText + '</td>' +
+        '<td>' + maxPerKriteria[j] + '</td>' +
+        '<td>' + minPerKriteria[j] + '</td>' +
+        '</tr>';
+    }
+    tableType += '</table></div>';
+
+    // 3. Tabel Normalisasi
+    let tableNorm = '<div class="result-step"><h3>3. Normalisasi Matriks</h3>';
+    tableNorm += '<p>Normalisasi menggunakan rumus:<br>' +
+      'Benefit: r<sub>ij</sub> = x<sub>ij</sub> / max x<sub>j</sub><br>' +
+      'Cost: r<sub>ij</sub> = min x<sub>j</sub> / x<sub>ij</sub></p>';
+
+    tableNorm += '<table><tr><th>Alternatif</th>';
+    for (let j = 0; j < n; j++) {
+      tableNorm += '<th>r' + (j + 1) + '</th>';
+    }
+    tableNorm += '</tr>';
+
+    for (let i = 0; i < m; i++) {
+      tableNorm += '<tr><td>' + alts[i] + '</td>';
+      for (let j = 0; j < n; j++) {
+        tableNorm += '<td>' + normalized[i][j].toFixed(4) + '</td>';
+      }
+      tableNorm += '</tr>';
+    }
+    tableNorm += '</table></div>';
+
+    // 4. Tabel Bobot
+    let tableWeight = '<div class="result-step"><h3>4. Bobot Kriteria</h3>';
+    tableWeight += '<table><tr>';
+    for (let j = 0; j < n; j++) {
+      tableWeight += '<th>w' + (j + 1) + '</th>';
+    }
+    tableWeight += '</tr><tr>';
+    for (let j = 0; j < n; j++) {
+      tableWeight += '<td>' + weights[j] + '</td>';
+    }
+    tableWeight += '</tr></table></div>';
+
+    // 5. Contoh perhitungan skor SAW untuk alternatif terbaik
+    const bestAlt = items[0];
+    const bestIdx = alts.indexOf(bestAlt.name);
+    let terms = [];
+    for (let j = 0; j < n; j++) {
+      terms.push(normalized[bestIdx][j].toFixed(4) + ' × ' + weights[j]);
+    }
+    const sumExpr = terms.join(' + ');
+
+    let exampleCalc = '<div class="result-step"><h3>5. Contoh Perhitungan Skor SAW</h3>';
+    exampleCalc += '<p>Contoh untuk alternatif terbaik: <strong>' + bestAlt.name + '</strong></p>';
+    exampleCalc += '<p>Rumus umum: V<sub>i</sub> = Σ (r<sub>ij</sub> × w<sub>j</sub>) ' +
+      'setelah normalisasi sesuai tipe kriteria (cost/benefit).</p>';
+    exampleCalc += '<p>Perhitungan:</p>';
+    exampleCalc += '<div class="formula">V<sub>' + bestAlt.name + '</sub> = ' + sumExpr +
+                   ' = <strong>' + bestAlt.score.toFixed(4) + '</strong></div></div>';
+
+    // 6. Tabel Skor & Ranking
+    let tableScore = '<div class="result-step"><h3>6. Skor Akhir dan Ranking</h3>';
+    tableScore += '<table><tr><th>Alternatif</th><th>Skor SAW</th><th>Ranking</th></tr>';
+    items.forEach((item, idx) => {
+      tableScore += '<tr>' +
+        '<td>' + item.name + '</td>' +
+        '<td>' + item.score.toFixed(4) + '</td>' +
+        '<td>' + (idx + 1) + '</td>' +
+        '</tr>';
+    });
+    tableScore += '</table></div>';
+
+    const conclusion =
+      '<div class="result-step"><h3>Laporan / Kesimpulan</h3>' +
+      '<p>Berdasarkan perhitungan SAW dengan ' + n + ' kriteria dan ' + m +
+      ' alternatif (mempertimbangkan kriteria cost dan benefit), ' +
+      'alternatif dengan skor tertinggi adalah <strong>' + bestAlt.name +
+      '</strong> dengan skor <strong>' + bestAlt.score.toFixed(4) +
+      '</strong>. Proses perhitungan meliputi normalisasi nilai setiap kriteria ' +
+      '(menggunakan rumus berbeda untuk cost dan benefit) serta pembobotan ' +
+      'menggunakan bobot yang diberikan sehingga menghasilkan skor total ' +
+      'V<sub>i</sub> untuk masing-masing alternatif.</p></div>';
+
+    const resDiv = document.getElementById('result');
+    resDiv.innerHTML =
+      '<h2>Hasil Metode SAW</h2>' +
+      tableData +
+      tableType +
+      tableNorm +
+      tableWeight +
+      exampleCalc +
+      tableScore +
+      conclusion;
+    resDiv.style.display = 'block';
+
+    // Chart skor SAW (urutan ranking)
+    const labels = items.map(i => i.name);
+    const dataScores = items.map(i => i.score);
+
+    if (sawChart) sawChart.destroy();
+    const ctx = document.getElementById('sawChart').getContext('2d');
+    sawChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Skor SAW',
+          data: dataScores,
+          backgroundColor: 'rgba(13, 110, 253, 0.8)',
+          borderColor: 'rgba(13, 110, 253, 1)',
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: true }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            max: 1
+          }
+        }
+      }
+    });
+  }
+
+  function resetForm() {
+    document.getElementById('altsInput').value = '';
+    document.getElementById('weightsInput').value = '';
+    document.getElementById('typesInput').value = '';
+    document.getElementById('matrixInput').value = '';
+    document.getElementById('result').innerHTML = '';
+    document.getElementById('result').style.display = 'none';
+    if (sawChart) {
+      sawChart.destroy();
+      sawChart = null;
+    }
+  }
+  </script>
+</body>
+</html>
